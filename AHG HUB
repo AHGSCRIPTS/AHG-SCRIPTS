@@ -1,0 +1,839 @@
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+local key = tostring(getgenv().KEY or "")
+
+local validKeys = {
+    ["TESTE-AHG123"] = true
+}
+
+if not validKeys[key] then
+    player:Kick("Acesso negado.")
+    return
+end
+
+print("✅ Acesso liberado")
+
+
+
+
+
+-- AHG HUB - FPS FLICK V1.5
+
+
+getgenv().AHG = getgenv().AHG or {}
+
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+if not WindUI then return end
+
+-- Configurações padrão
+AHG.AimbotEnabled = false
+AHG.WallCheck = false
+AHG.SmoothAim = 5
+AHG.FOVSize = 100
+AHG.FOVEnabled = false
+AHG.SpeedEnabled = false
+AHG.SpeedValue = 16
+AHG.BunnyHopEnabled = false
+AHG.ESPSettings = {
+    Outline = {Enabled = false, Color = Color3.fromRGB(255, 255, 255)},
+    Name = {Enabled = false, Color = Color3.fromRGB(255, 255, 0)},
+    Skeleton = {Enabled = false, Color = Color3.fromRGB(255, 0, 0)},
+    Tracer = {Enabled = false, Color = Color3.fromRGB(0, 255, 255)}
+}
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local Lighting = game:GetService("Lighting")
+
+-- FOV Circle usando ScreenGui (COMPATÍVEL COM MOBILE E PC)
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Criar ScreenGui
+local FOVGui = Instance.new("ScreenGui")
+FOVGui.Name = "AHG_FOVCircle"
+FOVGui.ResetOnSpawn = false
+FOVGui.IgnoreGuiInset = true
+FOVGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+FOVGui.Parent = PlayerGui
+
+-- Criar Frame circular
+local FOVCircleFrame = Instance.new("Frame")
+FOVCircleFrame.Name = "Circle"
+FOVCircleFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+FOVCircleFrame.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+FOVCircleFrame.BackgroundTransparency = 1
+FOVCircleFrame.BorderSizePixel = 0
+FOVCircleFrame.Size = UDim2.new(0, 200, 0, 200)
+FOVCircleFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+FOVCircleFrame.Visible = false
+FOVCircleFrame.ZIndex = 999
+FOVCircleFrame.Parent = FOVGui
+
+-- Criar UIStroke para fazer o círculo vermelho
+local CircleStroke = Instance.new("UIStroke")
+CircleStroke.Color = Color3.fromRGB(255, 0, 0)
+CircleStroke.Thickness = 2
+CircleStroke.Transparency = 0
+CircleStroke.Parent = FOVCircleFrame
+
+-- Criar UICorner para deixar redondo (círculo perfeito)
+local CircleCorner = Instance.new("UICorner")
+CircleCorner.CornerRadius = UDim.new(1, 0)
+CircleCorner.Parent = FOVCircleFrame
+
+-- Armazenar referência
+AHG.FOVCircle = {
+    Frame = FOVCircleFrame,
+    Stroke = CircleStroke,
+    Gui = FOVGui
+}
+
+-- Função para pegar o player mais próximo
+function AHG.GetClosestPlayer()
+    local ClosestPlayer = nil
+    local ShortestDistance = math.huge
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local character = player.Character
+            local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+            local head = character:FindFirstChild("Head")
+            local humanoid = character:FindFirstChild("Humanoid")
+            
+            if humanoidRootPart and head and humanoid and humanoid.Health > 0 then
+                local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
+                
+                if onScreen then
+                    local viewportCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                    local distance = (Vector2.new(screenPoint.X, screenPoint.Y) - viewportCenter).Magnitude
+                    
+                    if distance < AHG.FOVSize and distance < ShortestDistance then
+                        if AHG.WallCheck then
+                            local raycastParams = RaycastParams.new()
+                            raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+                            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+                            
+                            local rayResult = workspace:Raycast(Camera.CFrame.Position, (head.Position - Camera.CFrame.Position).Unit * 1000, raycastParams)
+                            
+                            if rayResult and rayResult.Instance and rayResult.Instance:IsDescendantOf(character) then
+                                ClosestPlayer = player
+                                ShortestDistance = distance
+                            end
+                        else
+                            ClosestPlayer = player
+                            ShortestDistance = distance
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return ClosestPlayer
+end
+
+-- Sistema ESP
+AHG.ESPObjects = {}
+
+function AHG.CreateESP(player)
+    if AHG.ESPObjects[player] then return end
+    AHG.ESPObjects[player] = {Outline = {}, Name = nil, Skeleton = {}, Tracer = nil}
+end
+
+function AHG.RemoveESP(player)
+    if AHG.ESPObjects[player] then
+        for _, obj in pairs(AHG.ESPObjects[player].Outline) do
+            if obj then pcall(function() obj:Remove() end) end
+        end
+        for _, obj in pairs(AHG.ESPObjects[player].Skeleton) do
+            if obj then pcall(function() obj:Remove() end) end
+        end
+        if AHG.ESPObjects[player].Name then pcall(function() AHG.ESPObjects[player].Name:Remove() end) end
+        if AHG.ESPObjects[player].Tracer then pcall(function() AHG.ESPObjects[player].Tracer:Remove() end) end
+        AHG.ESPObjects[player] = nil
+    end
+end
+
+function AHG.SetupCharacterDeath(player)
+    if player.Character then
+        local humanoid = player.Character:FindFirstChild("Humanoid")
+        if humanoid then
+            humanoid.Died:Connect(function()
+                AHG.RemoveESP(player)
+            end)
+        end
+    end
+end
+
+-- TEMA VERMELHO E PRETO COM GRADIENTE
+WindUI:AddTheme({
+    Name = "AHG Red & Black Theme",
+    
+    Accent = WindUI:Gradient({
+        ["0"] = { Color = Color3.fromHex("#ff0000"), Transparency = 0 },
+        ["100"] = { Color = Color3.fromHex("#000000"), Transparency = 0 },
+    }, {
+        Rotation = 45,
+    }),
+    
+    Background = Color3.fromHex("#0a0a0a"),
+    BackgroundTransparency = 0,
+    
+    Outline = WindUI:Gradient({
+        ["0"] = { Color = Color3.fromHex("#ff0000"), Transparency = 0 },
+        ["50"] = { Color = Color3.fromHex("#cc0000"), Transparency = 0 },
+        ["100"] = { Color = Color3.fromHex("#990000"), Transparency = 0 },
+    }, {
+        Rotation = 90,
+    }),
+    
+    Text = Color3.fromHex("#FFFFFF"),
+    Placeholder = Color3.fromHex("#7a7a7a"),
+    Button = Color3.fromHex("#1a1a1a"),
+    Icon = Color3.fromHex("#ff0000"),
+    Hover = Color3.fromHex("#ff0000"),
+    
+    WindowBackground = Color3.fromHex("#0a0a0a"),
+    WindowShadow = Color3.fromHex("#000000"),
+    
+    DialogBackground = Color3.fromHex("#0a0a0a"),
+    DialogBackgroundTransparency = 0,
+    DialogTitle = Color3.fromHex("#FFFFFF"),
+    DialogContent = Color3.fromHex("#FFFFFF"),
+    DialogIcon = Color3.fromHex("#ff0000"),
+    
+    WindowTopbarButtonIcon = Color3.fromHex("#ff0000"),
+    WindowTopbarTitle = Color3.fromHex("#FFFFFF"),
+    WindowTopbarAuthor = Color3.fromHex("#ff0000"),
+    WindowTopbarIcon = Color3.fromHex("#ff0000"),
+    
+    TabBackground = WindUI:Gradient({
+        ["0"] = { Color = Color3.fromHex("#1a1a1a"), Transparency = 0 },
+        ["100"] = { Color = Color3.fromHex("#0f0f0f"), Transparency = 0 },
+    }, {
+        Rotation = 0,
+    }),
+    TabTitle = Color3.fromHex("#FFFFFF"),
+    TabIcon = Color3.fromHex("#ff0000"),
+    
+    ElementBackground = Color3.fromHex("#1a1a1a"),
+    ElementTitle = Color3.fromHex("#FFFFFF"),
+    ElementDesc = Color3.fromHex("#AAAAAA"),
+    ElementIcon = Color3.fromHex("#ff0000"),
+    
+    PopupBackground = Color3.fromHex("#0a0a0a"),
+    PopupBackgroundTransparency = 0,
+    PopupTitle = Color3.fromHex("#FFFFFF"),
+    PopupContent = Color3.fromHex("#FFFFFF"),
+    PopupIcon = Color3.fromHex("#ff0000"),
+    
+    Toggle = Color3.fromHex("#1a1a1a"),
+    ToggleBar = WindUI:Gradient({
+        ["0"] = { Color = Color3.fromHex("#ff0000"), Transparency = 0 },
+        ["100"] = { Color = Color3.fromHex("#cc0000"), Transparency = 0 },
+    }, {
+        Rotation = 0,
+    }),
+    
+    Checkbox = Color3.fromHex("#1a1a1a"),
+    CheckboxIcon = Color3.fromHex("#ff0000"),
+    
+    Slider = Color3.fromHex("#1a1a1a"),
+    SliderThumb = WindUI:Gradient({
+        ["0"] = { Color = Color3.fromHex("#ff0000"), Transparency = 0 },
+        ["100"] = { Color = Color3.fromHex("#aa0000"), Transparency = 0 },
+    }, {
+        Rotation = 45,
+    }),
+})
+
+AHG.Window = WindUI:CreateWindow({
+    Title = "AHG HUB | FPS FLICK 🔥",
+    Author = "AHG Development",
+    Size = UDim2.new(0, 500, 0, 400),
+    Theme = "AHG Red & Black Theme",
+    Keybind = Enum.KeyCode.RightControl,
+})
+
+AHG.Window:Tag({
+    Title = "AHGHUB V1.5",
+    Icon = "skull",
+    Color = Color3.fromHex("#ff0000"),
+    Radius = 0,
+})
+
+AHG.Window:EditOpenButton({
+    Title = "Open AHG HUB",
+    Icon = "skull",
+    CornerRadius = UDim.new(0, 16),
+    StrokeThickness = 3,
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromHex("#ff0000")),
+        ColorSequenceKeypoint.new(0.5, Color3.fromHex("#cc0000")),
+        ColorSequenceKeypoint.new(1, Color3.fromHex("#000000"))
+    }),
+    Enabled = true,
+    Draggable = true,
+})
+
+AHG.TabAimbot = AHG.Window:Tab({Title = "Aimbot", Icon = "crosshair"})
+AHG.TabESP = AHG.Window:Tab({Title = "ESP", Icon = "eye"})
+AHG.TabHacks = AHG.Window:Tab({Title = "Hacks", Icon = "zap"})
+AHG.TabConfigs = AHG.Window:Tab({Title = "Configs", Icon = "settings"})
+
+-- ============================================
+-- ABA AIMBOT
+-- ============================================
+
+AHG.TabAimbot:Toggle({
+    Title = "Ativar Aimbot",
+    Description = "Mira automaticamente no alvo mais próximo",
+    Default = false,
+    Callback = function(v) 
+        AHG.AimbotEnabled = v
+    end
+})
+
+AHG.TabAimbot:Toggle({
+    Title = "Wall Check",
+    Description = "Verifica paredes entre você e o alvo",
+    Default = false,
+    Callback = function(v) AHG.WallCheck = v end
+})
+
+AHG.TabAimbot:Input({
+    Title = "Suavização (Smooth)",
+    Description = "⚠️ Suporta apenas de 1 a 20. Menor = Mais grudento",
+    Default = "5",
+    Placeholder = "Digite um número de 1 a 20",
+    Callback = function(v)
+        local num = tonumber(v)
+        if num and num >= 1 and num <= 20 then
+            AHG.SmoothAim = num
+        end
+    end
+})
+
+AHG.TabAimbot:Toggle({
+    Title = "Mostrar FOV",
+    Description = "Círculo vermelho mostrando alcance (Mobile + PC)",
+    Default = false,
+    Callback = function(v) 
+        AHG.FOVEnabled = v
+        AHG.FOVCircle.Frame.Visible = v
+    end
+})
+
+AHG.TabAimbot:Input({
+    Title = "Tamanho do FOV",
+    Description = "⚠️ Suporta de 50 a 500. Define o alcance do aimbot",
+    Default = "100",
+    Placeholder = "Digite um número de 50 a 500",
+    Callback = function(v)
+        local num = tonumber(v)
+        if num and num >= 50 and num <= 500 then
+            AHG.FOVSize = num
+            local size = num * 2
+            AHG.FOVCircle.Frame.Size = UDim2.new(0, size, 0, size)
+        end
+    end
+})
+
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        AHG.SetupCharacterDeath(player)
+        player.CharacterAdded:Connect(function()
+            AHG.RemoveESP(player)
+            wait(0.5)
+            AHG.SetupCharacterDeath(player)
+        end)
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        AHG.SetupCharacterDeath(player)
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    AHG.RemoveESP(player)
+end)
+
+-- ============================================
+-- ABA ESP
+-- ============================================
+
+AHG.TabESP:Toggle({
+    Title = "ESP Box",
+    Description = "Caixas ao redor dos jogadores",
+    Default = false,
+    Callback = function(v) AHG.ESPSettings.Outline.Enabled = v end
+})
+
+AHG.TabESP:Colorpicker({
+    Title = "Cor da Box",
+    Description = "Cor das caixas",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(c) AHG.ESPSettings.Outline.Color = c end
+})
+
+AHG.TabESP:Toggle({
+    Title = "ESP Name",
+    Description = "Nome + Distância acima dos jogadores",
+    Default = false,
+    Callback = function(v) AHG.ESPSettings.Name.Enabled = v end
+})
+
+AHG.TabESP:Colorpicker({
+    Title = "Cor do Nome",
+    Description = "Cor dos nomes",
+    Default = Color3.fromRGB(255, 255, 0),
+    Callback = function(c) AHG.ESPSettings.Name.Color = c end
+})
+
+AHG.TabESP:Toggle({
+    Title = "ESP Skeleton",
+    Description = "Esqueleto dos jogadores",
+    Default = false,
+    Callback = function(v) AHG.ESPSettings.Skeleton.Enabled = v end
+})
+
+AHG.TabESP:Colorpicker({
+    Title = "Cor do Skeleton",
+    Description = "Cor do esqueleto",
+    Default = Color3.fromRGB(255, 0, 0),
+    Callback = function(c) AHG.ESPSettings.Skeleton.Color = c end
+})
+
+AHG.TabESP:Toggle({
+    Title = "ESP Tracer",
+    Description = "Linhas até os jogadores",
+    Default = false,
+    Callback = function(v) AHG.ESPSettings.Tracer.Enabled = v end
+})
+
+AHG.TabESP:Colorpicker({
+    Title = "Cor do Tracer",
+    Description = "Cor das linhas",
+    Default = Color3.fromRGB(0, 255, 255),
+    Callback = function(c) AHG.ESPSettings.Tracer.Color = c end
+})
+
+-- ============================================
+-- ABA HACKS
+-- ============================================
+
+AHG.TabHacks:Toggle({
+    Title = "Speed Hack",
+    Description = "Ativa a velocidade customizada",
+    Default = false,
+    Callback = function(v)
+        AHG.SpeedEnabled = v
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("Humanoid") then
+            char.Humanoid.WalkSpeed = v and AHG.SpeedValue or 16
+        end
+    end
+})
+
+AHG.TabHacks:Input({
+    Title = "Valor da Velocidade",
+    Description = "⚠️ Suporta de 0 a 24. Acima disso você pode ser banido!",
+    Default = "16",
+    Placeholder = "Digite um número de 0 a 24",
+    Callback = function(v)
+        local num = tonumber(v)
+        if num and num >= 0 and num <= 24 then
+            AHG.SpeedValue = num
+            if AHG.SpeedEnabled then
+                local char = LocalPlayer.Character
+                if char and char:FindFirstChild("Humanoid") then
+                    char.Humanoid.WalkSpeed = num
+                end
+            end
+        end
+    end
+})
+
+AHG.TabHacks:Toggle({
+    Title = "BunnyHop",
+    Description = "Pula automaticamente",
+    Default = false,
+    Callback = function(v) AHG.BunnyHopEnabled = v end
+})
+
+-- ============================================
+-- ABA CONFIGS
+-- ============================================
+
+-- FPS Counter
+AHG.FPSText = Drawing.new("Text")
+AHG.FPSText.Size = 20
+AHG.FPSText.Center = false
+AHG.FPSText.Outline = true
+AHG.FPSText.Color = Color3.fromRGB(255, 0, 0)
+AHG.FPSText.Visible = false
+AHG.FPSText.Text = "FPS: 0"
+AHG.FPSText.ZIndex = 1000
+
+local lastTime = tick()
+local frameCount = 0
+local currentFPS = 0
+
+RunService.RenderStepped:Connect(function()
+    frameCount = frameCount + 1
+    local currentTime = tick()
+    if currentTime - lastTime >= 1 then
+        currentFPS = frameCount
+        frameCount = 0
+        lastTime = currentTime
+        AHG.FPSText.Text = "FPS: " .. tostring(currentFPS)
+    end
+    
+    if AHG.FPSText.Visible then
+        local textWidth = 70
+        AHG.FPSText.Position = Vector2.new(Camera.ViewportSize.X - textWidth, 10)
+    end
+end)
+
+AHG.TabConfigs:Toggle({
+    Title = "Mostrar FPS",
+    Description = "Exibe contador de FPS no canto superior direito",
+    Default = false,
+    Callback = function(v)
+        AHG.FPSText.Visible = v
+    end
+})
+
+AHG.TabConfigs:Divider({Text = "Sky Time (Horário do Céu)"})
+
+AHG.TabConfigs:Button({
+    Title = "☀️ Dia",
+    Description = "Muda o céu para horário de dia",
+    Callback = function()
+        Lighting.ClockTime = 14
+        Lighting.Brightness = 2
+        AHG.Window:Notify({
+            Title = "Sky Time",
+            Description = "Horário mudado para Dia ☀️",
+            Duration = 2
+        })
+    end
+})
+
+AHG.TabConfigs:Button({
+    Title = "🌙 Noite",
+    Description = "Muda o céu para horário de noite",
+    Callback = function()
+        Lighting.ClockTime = 0
+        Lighting.Brightness = 0
+        AHG.Window:Notify({
+            Title = "Sky Time",
+            Description = "Horário mudado para Noite 🌙",
+            Duration = 2
+        })
+    end
+})
+
+AHG.TabConfigs:Button({
+    Title = "🌅 Anoitecer/Pôr do Sol",
+    Description = "Muda o céu para horário de anoitecer",
+    Callback = function()
+        Lighting.ClockTime = 17
+        Lighting.Brightness = 1
+        AHG.Window:Notify({
+            Title = "Sky Time",
+            Description = "Horário mudado para Anoitecer 🌅",
+            Duration = 2
+        })
+    end
+})
+
+AHG.TabConfigs:Divider({Text = "⚠️ AVISO ⚠️"})
+
+AHG.TabConfigs:Paragraph({
+    Title = "⚠️ MAIS FUNÇÕES EM BREVE! ⚠️",
+    Description = "Estamos trabalhando em novas funcionalidades incríveis para o AHG HUB! Fique ligado nas próximas atualizações."
+})
+
+-- ============================================
+-- FUNÇÃO DE ATUALIZAR ESP
+-- ============================================
+
+function AHG.UpdateESP()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local shouldRemoveESP = false
+            
+            if not player.Character then
+                shouldRemoveESP = true
+            else
+                local char = player.Character
+                local humanoid = char:FindFirstChild("Humanoid")
+                local rootPart = char:FindFirstChild("HumanoidRootPart")
+                local head = char:FindFirstChild("Head")
+                
+                if not humanoid or humanoid.Health <= 0 or not rootPart or not head then
+                    shouldRemoveESP = true
+                else
+                    local localChar = LocalPlayer.Character
+                    if localChar and localChar:FindFirstChild("HumanoidRootPart") then
+                        local distance = (rootPart.Position - localChar.HumanoidRootPart.Position).Magnitude
+                        if distance > 1000 then
+                            shouldRemoveESP = true
+                        end
+                    end
+                end
+            end
+
+            if shouldRemoveESP then
+                AHG.RemoveESP(player)
+            elseif player.Character then
+                AHG.CreateESP(player)
+                
+                local char = player.Character
+                local rootPart = char:FindFirstChild("HumanoidRootPart")
+                local head = char:FindFirstChild("Head")
+                
+                if rootPart and head then
+                    -- ESP Box
+                    if AHG.ESPSettings.Outline.Enabled then
+                        if #AHG.ESPObjects[player].Outline == 0 then
+                            for i = 1, 4 do
+                                local line = Drawing.new("Line")
+                                line.Thickness = 2
+                                line.Transparency = 1
+                                table.insert(AHG.ESPObjects[player].Outline, line)
+                            end
+                        end
+                        
+                        local pos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+                        if onScreen then
+                            local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                            local legPos = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
+                            local height = math.abs(headPos.Y - legPos.Y)
+                            local width = height / 2
+                            
+                            AHG.ESPObjects[player].Outline[1].From = Vector2.new(pos.X - width, headPos.Y)
+                            AHG.ESPObjects[player].Outline[1].To = Vector2.new(pos.X + width, headPos.Y)
+                            AHG.ESPObjects[player].Outline[1].Color = AHG.ESPSettings.Outline.Color
+                            AHG.ESPObjects[player].Outline[1].Visible = true
+                            
+                            AHG.ESPObjects[player].Outline[2].From = Vector2.new(pos.X - width, legPos.Y)
+                            AHG.ESPObjects[player].Outline[2].To = Vector2.new(pos.X + width, legPos.Y)
+                            AHG.ESPObjects[player].Outline[2].Color = AHG.ESPSettings.Outline.Color
+                            AHG.ESPObjects[player].Outline[2].Visible = true
+                            
+                            AHG.ESPObjects[player].Outline[3].From = Vector2.new(pos.X - width, headPos.Y)
+                            AHG.ESPObjects[player].Outline[3].To = Vector2.new(pos.X - width, legPos.Y)
+                            AHG.ESPObjects[player].Outline[3].Color = AHG.ESPSettings.Outline.Color
+                            AHG.ESPObjects[player].Outline[3].Visible = true
+                            
+                            AHG.ESPObjects[player].Outline[4].From = Vector2.new(pos.X + width, headPos.Y)
+                            AHG.ESPObjects[player].Outline[4].To = Vector2.new(pos.X + width, legPos.Y)
+                            AHG.ESPObjects[player].Outline[4].Color = AHG.ESPSettings.Outline.Color
+                            AHG.ESPObjects[player].Outline[4].Visible = true
+                        else
+                            for _, line in pairs(AHG.ESPObjects[player].Outline) do
+                                line.Visible = false
+                            end
+                        end
+                    else
+                        for _, line in pairs(AHG.ESPObjects[player].Outline) do
+                            line.Visible = false
+                        end
+                    end
+                    
+                    -- ESP Name com Distância
+                    if AHG.ESPSettings.Name.Enabled then
+                        if not AHG.ESPObjects[player].Name then
+                            AHG.ESPObjects[player].Name = Drawing.new("Text")
+                            AHG.ESPObjects[player].Name.Center = true
+                            AHG.ESPObjects[player].Name.Outline = true
+                            AHG.ESPObjects[player].Name.Size = 16
+                        end
+                        
+                        local pos, onScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1, 0))
+                        
+                        local localChar = LocalPlayer.Character
+                        local distance = 0
+                        if localChar and localChar:FindFirstChild("HumanoidRootPart") then
+                            distance = (rootPart.Position - localChar.HumanoidRootPart.Position).Magnitude
+                        end
+                        
+                        local distanceText = string.format("%dm", math.floor(distance))
+                        AHG.ESPObjects[player].Name.Text = player.Name .. " | " .. distanceText
+                        
+                        AHG.ESPObjects[player].Name.Position = Vector2.new(pos.X, pos.Y)
+                        AHG.ESPObjects[player].Name.Color = AHG.ESPSettings.Name.Color
+                        AHG.ESPObjects[player].Name.Visible = onScreen
+                    elseif AHG.ESPObjects[player].Name then
+                        AHG.ESPObjects[player].Name.Visible = false
+                    end
+                    
+                    -- ESP Skeleton
+                    if AHG.ESPSettings.Skeleton.Enabled then
+                        if #AHG.ESPObjects[player].Skeleton == 0 then
+                            for i = 1, 5 do
+                                local line = Drawing.new("Line")
+                                line.Thickness = 1
+                                line.Transparency = 1
+                                table.insert(AHG.ESPObjects[player].Skeleton, line)
+                            end
+                        end
+                        
+                        local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+                        local leftArm = char:FindFirstChild("Left Arm") or char:FindFirstChild("LeftUpperArm")
+                        local rightArm = char:FindFirstChild("Right Arm") or char:FindFirstChild("RightUpperArm")
+                        local leftLeg = char:FindFirstChild("Left Leg") or char:FindFirstChild("LeftUpperLeg")
+                        local rightLeg = char:FindFirstChild("Right Leg") or char:FindFirstChild("RightUpperLeg")
+                        
+                        if torso then
+                            local headP, headOnScreen = Camera:WorldToViewportPoint(head.Position)
+                            local torsoP, torsoOnScreen = Camera:WorldToViewportPoint(torso.Position)
+                            
+                            if headOnScreen and torsoOnScreen then
+                                AHG.ESPObjects[player].Skeleton[1].From = Vector2.new(headP.X, headP.Y)
+                                AHG.ESPObjects[player].Skeleton[1].To = Vector2.new(torsoP.X, torsoP.Y)
+                                AHG.ESPObjects[player].Skeleton[1].Color = AHG.ESPSettings.Skeleton.Color
+                                AHG.ESPObjects[player].Skeleton[1].Visible = true
+                                
+                                if leftArm then
+                                    local armP, armOnScreen = Camera:WorldToViewportPoint(leftArm.Position)
+                                    if armOnScreen then
+                                        AHG.ESPObjects[player].Skeleton[2].From = Vector2.new(torsoP.X, torsoP.Y)
+                                        AHG.ESPObjects[player].Skeleton[2].To = Vector2.new(armP.X, armP.Y)
+                                        AHG.ESPObjects[player].Skeleton[2].Color = AHG.ESPSettings.Skeleton.Color
+                                        AHG.ESPObjects[player].Skeleton[2].Visible = true
+                                    else
+                                        AHG.ESPObjects[player].Skeleton[2].Visible = false
+                                    end
+                                end
+                                
+                                if rightArm then
+                                    local armP, armOnScreen = Camera:WorldToViewportPoint(rightArm.Position)
+                                    if armOnScreen then
+                                        AHG.ESPObjects[player].Skeleton[3].From = Vector2.new(torsoP.X, torsoP.Y)
+                                        AHG.ESPObjects[player].Skeleton[3].To = Vector2.new(armP.X, armP.Y)
+                                        AHG.ESPObjects[player].Skeleton[3].Color = AHG.ESPSettings.Skeleton.Color
+                                        AHG.ESPObjects[player].Skeleton[3].Visible = true
+                                    else
+                                        AHG.ESPObjects[player].Skeleton[3].Visible = false
+                                    end
+                                end
+                                
+                                if leftLeg then
+                                    local legP, legOnScreen = Camera:WorldToViewportPoint(leftLeg.Position)
+                                    if legOnScreen then
+                                        AHG.ESPObjects[player].Skeleton[4].From = Vector2.new(torsoP.X, torsoP.Y)
+                                        AHG.ESPObjects[player].Skeleton[4].To = Vector2.new(legP.X, legP.Y)
+                                        AHG.ESPObjects[player].Skeleton[4].Color = AHG.ESPSettings.Skeleton.Color
+                                        AHG.ESPObjects[player].Skeleton[4].Visible = true
+                                    else
+                                        AHG.ESPObjects[player].Skeleton[4].Visible = false
+                                    end
+                                end
+                                
+                                if rightLeg then
+                                    local legP, legOnScreen = Camera:WorldToViewportPoint(rightLeg.Position)
+                                    if legOnScreen then
+                                        AHG.ESPObjects[player].Skeleton[5].From = Vector2.new(torsoP.X, torsoP.Y)
+                                        AHG.ESPObjects[player].Skeleton[5].To = Vector2.new(legP.X, legP.Y)
+                                        AHG.ESPObjects[player].Skeleton[5].Color = AHG.ESPSettings.Skeleton.Color
+                                        AHG.ESPObjects[player].Skeleton[5].Visible = true
+                                    else
+                                        AHG.ESPObjects[player].Skeleton[5].Visible = false
+                                    end
+                                end
+                            else
+                                for _, line in pairs(AHG.ESPObjects[player].Skeleton) do
+                                    line.Visible = false
+                                end
+                            end
+                        else
+                            for _, line in pairs(AHG.ESPObjects[player].Skeleton) do
+                                line.Visible = false
+                            end
+                        end
+                    else
+                        for _, line in pairs(AHG.ESPObjects[player].Skeleton) do
+                            line.Visible = false
+                        end
+                    end
+                    
+                    -- ESP Tracer
+                    if AHG.ESPSettings.Tracer.Enabled then
+                        if not AHG.ESPObjects[player].Tracer then
+                            AHG.ESPObjects[player].Tracer = Drawing.new("Line")
+                            AHG.ESPObjects[player].Tracer.Thickness = 1
+                            AHG.ESPObjects[player].Tracer.Transparency = 1
+                        end
+                        
+                        local pos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+                        AHG.ESPObjects[player].Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                        AHG.ESPObjects[player].Tracer.To = Vector2.new(pos.X, pos.Y)
+                        AHG.ESPObjects[player].Tracer.Color = AHG.ESPSettings.Tracer.Color
+                        AHG.ESPObjects[player].Tracer.Visible = onScreen
+                    elseif AHG.ESPObjects[player].Tracer then
+                        AHG.ESPObjects[player].Tracer.Visible = false
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ============================================
+-- LOOP PRINCIPAL
+-- ============================================
+
+RunService.RenderStepped:Connect(function()
+    -- Atualizar FOV Circle (ScreenGui - Mobile + PC compatível)
+    if AHG.FOVCircle and AHG.FOVCircle.Frame then
+        AHG.FOVCircle.Frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+        AHG.FOVCircle.Frame.Visible = AHG.FOVEnabled
+    end
+    
+    if AHG.AimbotEnabled then
+        local target = AHG.GetClosestPlayer()
+        if target and target.Character then
+            local targetPart = target.Character:FindFirstChild("Head")
+            if targetPart then
+                local targetPos = targetPart.Position
+                local cameraPos = Camera.CFrame.Position
+                local targetCFrame = CFrame.new(cameraPos, targetPos)
+                Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, 1 / AHG.SmoothAim)
+            end
+        end
+    end
+    
+    if AHG.SpeedEnabled then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("Humanoid") then
+            if char.Humanoid.WalkSpeed ~= AHG.SpeedValue then
+                char.Humanoid.WalkSpeed = AHG.SpeedValue
+            end
+        end
+    end
+    
+    if AHG.BunnyHopEnabled then
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("Humanoid") then
+            local hum = char.Humanoid
+            local state = hum:GetState()
+            if state ~= Enum.HumanoidStateType.Freefall and state ~= Enum.HumanoidStateType.Flying then
+                hum:ChangeState(Enum.HumanoidStateType.Jumping)
+            end
+        end
+    end
+    
+    pcall(AHG.UpdateESP)
+end)
+
+print("AHG HUB | FPS FLICK 🔥 V1.5 - Carregado! FOV Mobile Compatível! 💀🔴📱")
